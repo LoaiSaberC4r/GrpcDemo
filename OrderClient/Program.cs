@@ -1,3 +1,4 @@
+﻿using Grpc.Core;
 using Grpc.Net.Client;
 using OrderClient.Protos;
 
@@ -27,14 +28,39 @@ app.MapControllers();
 var channel = GrpcChannel.ForAddress("https://localhost:7195");
 var client = new OrderService.OrderServiceClient(channel);
 
-var createOrderResponse = await client.CreateOrderAsync(new CreateOrderRequest
+try
 {
-    OrderName = "New Order",
-    Items = { new OrderItem { ItemName = "Item1", Quantity = 2 } }
+    var deadline = DateTime.UtcNow.AddSeconds(5);
+    var createOrderResponse = await client.CreateOrderAsync(
+        new CreateOrderRequest
+        {
+            OrderName = "New Order",
+            Items = { new OrderItem { ItemName = "Item1", Quantity = 2 } }
+        }, deadline: deadline);
+    Console.WriteLine($"Order ID: {createOrderResponse.OrderId}, Status: {createOrderResponse.Status}");
+}
+catch (RpcException ex)
+{
+    if (ex.StatusCode == StatusCode.DeadlineExceeded)
+    {
+        Console.WriteLine("تم تجاوز الموعد النهائي، لم يتم الرد من الخادم.");
+    }
+    else
+    {
+        Console.WriteLine($"حدث خطأ أثناء الاتصال بالخادم: {ex.StatusCode} - {ex.Status.Detail}");
+    }
+}
+var streamingCall = client.StreamOrders(new CreateOrderRequest
+{
+    OrderName = "New Streaming Order",
+    Items = { new OrderItem { ItemName = "Item1", Quantity = 1 } }
 });
-
-Console.WriteLine($"Order ID: {createOrderResponse.OrderId}, Status: {createOrderResponse.Status}");
-
-var getOrderResponse = await client.GetOrderAsync(new GetOrderRequest { OrderId = createOrderResponse.OrderId });
-Console.WriteLine($"Order Name: {getOrderResponse.OrderName}, Item: {getOrderResponse.Items[0].ItemName}");
+await foreach (var update in streamingCall.ResponseStream.ReadAllAsync())
+{
+    Console.WriteLine($"Order ID: {update.OrderId}, Order Name: {update.OrderName}");
+    foreach (var item in update.Items)
+    {
+        Console.WriteLine($"Item: {item.ItemName}, Quantity: {item.Quantity}");
+    }
+}
 app.Run();

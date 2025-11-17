@@ -2,6 +2,14 @@ using OrderService.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
+//builder.WebHost.ConfigureKestrel(options =>
+//{
+//    options.Listen(IPAddress.Any, 7195, listenOptions =>
+//    {
+//        listenOptions.UseHttps("path-to-your-cert.pfx", "cert-password");
+//    });
+//});
+
 // Add services to the container.
 builder.Services.AddGrpc();
 

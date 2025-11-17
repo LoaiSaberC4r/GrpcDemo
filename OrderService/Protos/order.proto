@@ -6,6 +6,8 @@ package orders;
 service OrderService {
   rpc CreateOrder (CreateOrderRequest) returns (CreateOrderResponse);
   rpc GetOrder (GetOrderRequest) returns (GetOrderResponse);
+    rpc StreamOrders(CreateOrderRequest) returns (stream GetOrderResponse);
+
 }
 
 message CreateOrderRequest {
