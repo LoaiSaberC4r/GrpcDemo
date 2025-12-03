@@ -1,76 +1,33 @@
 ﻿using Grpc.Core;
+using Microsoft.AspNetCore.Authorization;
 using OrderService.Protos;
 
 namespace OrderService.Services
 {
+    [Authorize]
     public class OrderServiceImpl : OrderService.Protos.OrderService.OrderServiceBase
     {
-        private static string GetOrderCorrelationId(ServerCallContext context)
-        {
-            var correlationId = context.RequestHeaders.FirstOrDefault(x => x.Key == "x-correlation-id")
-                ?.Value ?? Guid.NewGuid().ToString();
-            return correlationId;
-        }
-
-        private static string GetAcceptLanguage(ServerCallContext context)
-        {
-            var header = context.RequestHeaders.FirstOrDefault(x => x.Key == "accept-language")
-                    ?.Value ?? "en";
-            return header;
-        }
-
-        private static void AddCorrelationIdToTrailers(ServerCallContext context, string correlationId)
-        {
-            context.ResponseTrailers.Add("x-correlation-id", correlationId);
-        }
-
+        // CreateOrder متاحة لأي مستخدم Authenticated
         public override Task<CreateOrderResponse> CreateOrder(CreateOrderRequest request, ServerCallContext context)
         {
-            // 1) قراءة الـ Metadata
-            var correlationId = GetOrderCorrelationId(context);
-            var acceptLanguage = GetAcceptLanguage(context);
-
-            Console.WriteLine($"[CreateOrder] CorrelationId={correlationId}, AcceptLanguage={acceptLanguage}");
-
-            try
+            if (string.IsNullOrWhiteSpace(request.OrderName))
             {
-                if (string.IsNullOrEmpty(request.OrderName))
-                {
-                    throw new RpcException(new Status(
-                        StatusCode.InvalidArgument,
-                        "Order name is required"));
-                }
-
-                var response = new CreateOrderResponse
-                {
-                    OrderId = Guid.NewGuid().ToString(),
-                    Status = "Created"
-                };
-
-                // 2) نضيف CorrelationId فى Trailers
-                AddCorrelationIdToTrailers(context, correlationId);
-
-                return Task.FromResult(response);
-            }
-            catch (RpcException)
-            {
-                // لو أنت رميت RpcException خلاص
-                AddCorrelationIdToTrailers(context, correlationId);
-                throw;
-            }
-            catch (Exception ex)
-            {
-                // تحويل أى Exception عادى لـ RpcException
-                AddCorrelationIdToTrailers(context, correlationId);
-
-                Console.WriteLine($"[CreateOrder][Error] CorrelationId={correlationId}, Exception={ex}");
-
                 throw new RpcException(new Status(
-                    StatusCode.Internal,
-                    "An unexpected error occurred while creating the order"));
+                    StatusCode.InvalidArgument,
+                    "Order name is required"));
             }
+
+            var response = new CreateOrderResponse
+            {
+                OrderId = Guid.NewGuid().ToString(),
+                Status = "Created"
+            };
+
+            return Task.FromResult(response);
         }
 
+        // GetOrder متاحة للجميع (حتى بدون Auth) كمثال:
+        [AllowAnonymous]
         public override Task<GetOrderResponse> GetOrder(GetOrderRequest request, ServerCallContext context)
         {
             return Task.FromResult(new GetOrderResponse
@@ -81,14 +38,14 @@ namespace OrderService.Services
             });
         }
 
+        // StreamOrders محتاجة Policy معينة (مثلاً Supervisor)
+        [Authorize(Policy = "RequireSupervisor")]
         public override async Task StreamOrders(CreateOrderRequest request, IServerStreamWriter<GetOrderResponse> responseStream, ServerCallContext context)
         {
-            if (context.CancellationToken.IsCancellationRequested)
-            {
-                throw new RpcException(new Status(StatusCode.Cancelled, "تم إلغاء العملية من قبل العميل"));
-            }
             for (int i = 0; i < 5; i++)
             {
+                context.CancellationToken.ThrowIfCancellationRequested();
+
                 var response = new GetOrderResponse
                 {
                     OrderId = Guid.NewGuid().ToString(),
@@ -97,102 +54,49 @@ namespace OrderService.Services
                 };
 
                 await responseStream.WriteAsync(response);
-                await Task.Delay(1000);
+                await Task.Delay(1000, context.CancellationToken);
             }
         }
 
+        // UploadOrders: يكفي يكون Authenticated
         public override async Task<UploadOrdersResponse> UploadOrders(
-    IAsyncStreamReader<CreateOrderRequest> requestStream,
-    ServerCallContext context)
+            IAsyncStreamReader<CreateOrderRequest> requestStream,
+            ServerCallContext context)
         {
-            var correlationId = GetOrderCorrelationId(context);
-            AddCorrelationIdToTrailers(context, correlationId);
-
             int totalOrders = 0;
             int totalItems = 0;
 
-            try
+            await foreach (var request in requestStream.ReadAllAsync(context.CancellationToken))
             {
-                await foreach (var request in requestStream.ReadAllAsync(context.CancellationToken))
-                {
-                    totalOrders++;
-
-                    var orderItemsCount = request.Items?.Count ?? 0;
-                    totalItems += orderItemsCount;
-
-                    Console.WriteLine($"[UploadOrders] CorrelationId={correlationId}, OrderName={request.OrderName}, Items={orderItemsCount}");
-
-                    // هنا فى الحقيقة هتعمل Save فى DB أو Queue
-                    // بس احنا فى المثال هنكتفى بالـ Counters
-                }
-
-                return new UploadOrdersResponse
-                {
-                    TotalOrders = totalOrders,
-                    TotalItems = totalItems
-                };
+                totalOrders++;
+                totalItems += request.Items?.Count ?? 0;
             }
-            catch (OperationCanceledException)
+
+            return new UploadOrdersResponse
             {
-                Console.WriteLine($"[UploadOrders][Cancelled] CorrelationId={correlationId}");
-                throw new RpcException(new Status(
-                    StatusCode.Cancelled,
-                    "تم إلغاء رفع الأوردرات بواسطة العميل"));
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[UploadOrders][Error] CorrelationId={correlationId}, Exception={ex}");
-                throw new RpcException(new Status(
-                    StatusCode.Internal,
-                    "حدث خطأ أثناء رفع الأوردرات"));
-            }
+                TotalOrders = totalOrders,
+                TotalItems = totalItems
+            };
         }
 
+        // LiveOrders: برضه ممكن نخليها لسوبرفايزور بس
+        [Authorize(Policy = "RequireSupervisor")]
         public override async Task LiveOrders(
-    IAsyncStreamReader<LiveOrderClientMessage> requestStream,
-    IServerStreamWriter<LiveOrderServerMessage> responseStream,
-    ServerCallContext context)
+            IAsyncStreamReader<LiveOrderClientMessage> requestStream,
+            IServerStreamWriter<LiveOrderServerMessage> responseStream,
+            ServerCallContext context)
         {
-            var correlationId = GetOrderCorrelationId(context);
-            AddCorrelationIdToTrailers(context, correlationId);
-
-            Console.WriteLine($"[LiveOrders] Started. CorrelationId={correlationId}");
-
-            try
+            await foreach (var clientMsg in requestStream.ReadAllAsync(context.CancellationToken))
             {
-                await foreach (var clientMsg in requestStream.ReadAllAsync(context.CancellationToken))
+                var response = new LiveOrderServerMessage
                 {
-                    Console.WriteLine($"[LiveOrders] Client => OrderId={clientMsg.OrderId}, Action={clientMsg.Action}");
+                    OrderId = clientMsg.OrderId,
+                    Status = "Created",
+                    Message = $"تم استقبال طلب متابعة الأوردر {clientMsg.OrderId}"
+                };
 
-                    // مثال: لو Action = Subscribe هنرد بحالة "Created" مؤقتة
-                    var response = new LiveOrderServerMessage
-                    {
-                        OrderId = clientMsg.OrderId,
-                        Status = "Created",
-                        Message = $"تم استقبال طلب متابعة الأوردر {clientMsg.OrderId}"
-                    };
-
-                    await responseStream.WriteAsync(response);
-
-                    // تقدر هنا تحط Logic حقيقى:
-                    // - Register subscription
-                    // - Push updates من Background job
-                }
+                await responseStream.WriteAsync(response);
             }
-            catch (OperationCanceledException)
-            {
-                Console.WriteLine($"[LiveOrders][Cancelled] CorrelationId={correlationId}");
-                // من حق السيرفر يكتفى باللوج، والـ Status هيتبعت Cancelled للعميل
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[LiveOrders][Error] CorrelationId={correlationId}, Exception={ex}");
-                throw new RpcException(new Status(
-                    StatusCode.Internal,
-                    "حدث خطأ أثناء الـ LiveOrders"));
-            }
-
-            Console.WriteLine($"[LiveOrders] Ended. CorrelationId={correlationId}");
         }
     }
 }

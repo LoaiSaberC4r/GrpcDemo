@@ -1,22 +1,58 @@
+﻿using Microsoft.AspNetCore.Authentication.JwtBearer;
+using OrderService.Infrastructure;
 using OrderService.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
-//builder.WebHost.ConfigureKestrel(options =>
-//{
-//    options.Listen(IPAddress.Any, 7195, listenOptions =>
-//    {
-//        listenOptions.UseHttps("path-to-your-cert.pfx", "cert-password");
-//    });
-//});
+builder.Services
+    .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(options =>
+    {
+        // دى أمثلة، انت هتظبطها على الـ IdentityProvider بتاعك
+        options.Authority = "https://demo-identity-server"; // Issuer
+        options.Audience = "orders-api";                    // اسم الـ API
+        options.RequireHttpsMetadata = true;                // فى Dev ممكن تخليها false لو شغال بدون https
 
-// Add services to the container.
-builder.Services.AddGrpc();
+        // اختياري: لو حابب تضيف Events للـ Logging أو تعديل السلوك
+        // options.Events = new JwtBearerEvents { ... };
+    });
+
+// ------------------------
+// 2) Authorization
+// ------------------------
+builder.Services.AddAuthorization(options =>
+{
+    // Policy مثال: محتاجة role = Supervisor
+    options.AddPolicy("RequireSupervisor", policy =>
+    {
+        policy.RequireAuthenticatedUser();
+        policy.RequireRole("Supervisor");
+    });
+});
+
+// ------------------------
+// 3) gRPC + Interceptors
+// ------------------------
+builder.Services.AddGrpc(options =>
+{
+    // Interceptor اللى عملناه قبل كده
+    options.Interceptors.Add<GrpcLoggingInterceptor>();
+});
 
 var app = builder.Build();
 
-// Configure the HTTP request pipeline.
-app.MapGrpcService<OrderServiceImpl>();
-app.MapGet("/", () => "Communication with gRPC endpoints must be made through a gRPC client. To learn how to create a client, visit: https://go.microsoft.com/fwlink/?linkid=2086909");
+// ------------------------
+// 4) Middleware Pipeline
+// ------------------------
+app.UseRouting();
+
+app.UseAuthentication();
+app.UseAuthorization();
+
+app.UseEndpoints(endpoints =>
+{
+    endpoints.MapGrpcService<OrderServiceImpl>();
+    endpoints.MapGet("/", () => "Use a gRPC client to communicate with this service.");
+});
 
 app.Run();
