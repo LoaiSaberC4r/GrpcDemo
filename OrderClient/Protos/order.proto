@@ -6,7 +6,9 @@ package orders;
 service OrderService {
   rpc CreateOrder (CreateOrderRequest) returns (CreateOrderResponse);
   rpc GetOrder (GetOrderRequest) returns (GetOrderResponse);
-      rpc StreamOrders(CreateOrderRequest) returns (stream GetOrderResponse);
+    rpc StreamOrders(CreateOrderRequest) returns (stream GetOrderResponse);
+    rpc UploadOrders(stream CreateOrderRequest ) returns (UploadOrdersResponse);
+    rpc LiveOrders(stream LiveOrderClientMessage) returns (stream LiveOrderServerMessage);
 
 }
 
@@ -33,4 +35,19 @@ message GetOrderResponse {
   string orderId = 1;
   string orderName = 2;
   repeated OrderItem items = 3;
+}
+message UploadOrdersResponse
+{
+int32 totalOrders =1 ;
+int32 totalItems=2 ;
+}
+message LiveOrderClientMessage {
+  string orderId = 1;
+  string action = 2;
+}
+
+message LiveOrderServerMessage {
+  string orderId = 1;
+  string status = 2;
+  string message = 3;
 }

@@ -63,4 +63,40 @@ await foreach (var update in streamingCall.ResponseStream.ReadAllAsync())
         Console.WriteLine($"Item: {item.ItemName}, Quantity: {item.Quantity}");
     }
 }
+
+// =======================
+// Client Streaming: UploadOrders
+// =======================
+try
+{
+    using var uploadCall = client.UploadOrders();
+
+    // نبعت شوية أوردرات
+    for (int i = 1; i <= 3; i++)
+    {
+        var request = new CreateOrderRequest
+        {
+            OrderName = $"Bulk Order {i}",
+            Items =
+            {
+                new OrderItem { ItemName = "ItemA", Quantity = i },
+                new OrderItem { ItemName = "ItemB", Quantity = i + 1 }
+            }
+        };
+
+        Console.WriteLine($"[Client] Sending order: {request.OrderName}");
+        await uploadCall.RequestStream.WriteAsync(request);
+    }
+
+    // نقفل الـ Stream من ناحية العميل (كده بنقول للسيرفر خلصنا إرسال)
+    await uploadCall.RequestStream.CompleteAsync();
+
+    // نستقبل الـ Response النهائى
+    var summary = await uploadCall.ResponseAsync;
+    Console.WriteLine($"[Client] Upload summary: TotalOrders={summary.TotalOrders}, TotalItems={summary.TotalItems}");
+}
+catch (RpcException ex)
+{
+    Console.WriteLine($"[Client][UploadOrders] Error: {ex.StatusCode} - {ex.Status.Detail}");
+}
 app.Run();
